@@ -1,44 +1,44 @@
 import streamlit as st
-import os
 import requests
 import json
 import google.generativeai as genai
 
-# 1. 페이지 설정
 st.set_page_config(page_title="산도리 통합 관리", page_icon="🍓", layout="wide")
 
-# 구글 스프레드시트 DB 주소
+# 사장님의 구글 시트 주소
 DB_URL = "https://script.google.com/macros/s/AKfycbz_43zmUq1z95JBauFRtiqtvMv2jxDV7neGmQca8w8Z-NmIKivvc88QVWIsTNccCZ_IIg/exec"
 
-# 2. 구글 시트에서 문자 기록 불러오기
 def load_sms_logs():
     try:
         response = requests.get(DB_URL + "?action=read")
         if response.status_code == 200:
             raw_data = response.json()
-            if len(raw_data) <= 1:
-                return []
+            if len(raw_data) <= 1: return []
             logs = []
             for row in raw_data[1:]:
                 if len(row) >= 4:
-                    logs.append({
-                        "time": row[0],
-                        "phone": str("0" + str(row[1])) if str(row[1]).startswith("10") else str(row[1]),
-                        "message": row[2],
-                        "sender": row[3]
-                    })
+                    logs.append({"time": row[0], "phone": str("0" + str(row[1])) if str(row[1]).startswith("10") else str(row[1]), "message": row[2], "sender": row[3]})
             return logs
-    except Exception as e:
-        st.error("데이터베이스 연결 오류")
+    except:
+        return []
     return []
 
+# 🚨 새 기능: 구글 시트 '설정' 탭에서 영구 저장된 값 불러오기
+def load_settings():
+    try:
+        res = requests.get(DB_URL + "?action=read_settings")
+        if res.status_code == 200: return res.json()
+    except: pass
+    return {}
+
 sms_data = load_sms_logs()
+settings_data = load_settings()
 
 # ---------------------------------------------------------
-# 3. 세션 초기화
+# 세션 초기화 (불러온 설정이 있으면 그걸 우선 적용)
 # ---------------------------------------------------------
 if 'sando_persona' not in st.session_state:
-    st.session_state.sando_persona = """당신은 프리미엄 디저트 카페 '산도리(sando.li)'의 친절하고 전문적인 고객 응대 매니저입니다.
+    st.session_state.sando_persona = settings_data.get("persona", """당신은 프리미엄 디저트 카페 '산도리(sando.li)'의 친절하고 전문적인 고객 응대 매니저입니다.
 제공된 정보에 한해서 답변해. 없는 정보에 대해서는 답변하지 말고, "확인 필요"라는 안내 메세지를 보내줘.
 고객의 질문에 대답할 때, 항상 '함께 전달되는 실시간 재고/가격 정보'를 최우선으로 확인하고 답변해야 합니다.
 없는 메뉴나 품절된 메뉴는 정중하게 품절을 안내하세요.
@@ -46,30 +46,31 @@ if 'sando_persona' not in st.session_state:
 친절하고 따뜻하고, 친근한 톤을 유지하고 적절한 이모티콘 도 섞어서 대답해줘, 부정적 표현(거절, 불가, 위험, 문제 등)은 직접적으로 사용하지 말고 완만한 표현으로 대체해줘.
 (예 : 어려울 수 있어 안내 도와드립니다, 현재 제공되지 않는 점 양해 부탁드립니다 등)
 기호나 # 기호 등 마크다운 서식은 절대 작성하지 마. (텍스트로만 깔끔하게 답변해)
-산도 말할때 앞에 수식어를 붙이지 말아줘, 그리고 ~~하는게 어떨까요? 이런 권유도 하지 말아줘"""
-
-if 'menu_list' not in st.session_state:
-    st.session_state.menu_list = [
-        {"메뉴 이름": "금실/죽향 딸기 산도", "가격": "8,000원"},
-        {"메뉴 이름": "백자 메론 산도", "가격": "8,500원"},
-        {"메뉴 이름": "자몽 소르베 에스프레소", "가격": "6,500원"}
-    ]
-
+산도 말할때 앞에 수식어를 붙이지 말아줘, 그리고 ~~하는게 어떨까요? 이런 권유도 하지 말아줘""")
+    
 if 'daily_notes' not in st.session_state:
-    st.session_state.daily_notes = "오늘 백자 메론 당도가 매우 높습니다! 딸기 산도는 품절 임박입니다."
+    st.session_state.daily_notes = settings_data.get("daily_notes", "오늘 백자 메론 당도가 매우 높습니다! 딸기 산도는 품절 임박입니다.")
+    
+if 'menu_list' not in st.session_state:
+    try:
+        saved_menu = json.loads(settings_data.get("menu", "[]"))
+        st.session_state.menu_list = saved_menu if saved_menu else [{"메뉴 이름": "금실/죽향 딸기 산도", "가격": "8,000원"}, {"메뉴 이름": "백자 메론 산도", "가격": "8,500원"}, {"메뉴 이름": "자몽 소르베 에스프레소", "가격": "6,500원"}]
+    except:
+        st.session_state.menu_list = [{"메뉴 이름": "금실/죽향 딸기 산도", "가격": "8,000원"}, {"메뉴 이름": "백자 메론 산도", "가격": "8,500원"}, {"메뉴 이름": "자몽 소르베 에스프레소", "가격": "6,500원"}]
+
 if 'webhook_url' not in st.session_state:
-    st.session_state.webhook_url = ""
+    st.session_state.webhook_url = "" 
+    
 if 'gemini_api_key' not in st.session_state:
     try:
         st.session_state.gemini_api_key = st.secrets["GEMINI_API_KEY"]
     except:
         st.session_state.gemini_api_key = "" 
+        
 if 'selected_model' not in st.session_state:
-    st.session_state.selected_model = "gemini-3.5-flash-lite" # 기본값
+    st.session_state.selected_model = "gemini-3.5-flash-lite"
 
-# ---------------------------------------------------------
-# 4. 왼쪽 사이드바
-# ---------------------------------------------------------
+# --- 왼쪽 사이드바 ---
 with st.sidebar:
     st.title("📞 과거 연락처 목록")
     unique_phones = []
@@ -83,11 +84,8 @@ with st.sidebar:
     else:
         selected_phone = st.radio("대화 내용을 확인할 번호 (최신순):", unique_phones)
 
-# ---------------------------------------------------------
-# 5. 오른쪽 메인 화면
-# ---------------------------------------------------------
+# --- 오른쪽 메인 화면 ---
 st.title("🍓 산도리(sando.li) 실시간 문자 관리")
-
 tab1, tab2 = st.tabs(["💬 실시간 고객 문의", "⚙️ 설정 및 AI 관리"])
 
 with tab2:
@@ -98,7 +96,6 @@ with tab2:
     with col_b:
         st.session_state.gemini_api_key = st.text_input("🧠 Gemini API 키", value=st.session_state.gemini_api_key, type="password")
         
-        # 🚨 [새로 추가된 기능] API 키가 입력되면 사용 가능한 모델 목록을 불러와 선택창으로 보여줌
         available_models = []
         if st.session_state.gemini_api_key:
             try:
@@ -108,18 +105,28 @@ with tab2:
                         available_models.append(m.name.replace("models/", ""))
                         
                 if available_models:
-                    # 기존 선택된 모델이 리스트에 있으면 그 위치를 찾고, 없으면 0번째 선택
                     idx = available_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_models else 0
-                    st.session_state.selected_model = st.selectbox("🤖 사용할 AI 모델 선택 (자동 로드됨)", available_models, index=idx)
-                else:
-                    st.warning("사용 가능한 모델을 찾을 수 없습니다.")
-            except Exception as e:
-                st.error("API 키가 올바르지 않거나 모델을 불러올 수 없습니다.")
-        else:
-            st.info("API 키를 입력하면 선택 가능한 AI 모델 목록이 나타납니다.")
+                    st.session_state.selected_model = st.selectbox("🤖 사용할 AI 모델", available_models, index=idx)
+            except:
+                pass
     
     st.markdown("---")
-    st.subheader("🤖 AI 페르소나 (성격 및 행동 규칙)")
+    
+    # 🚨 여기에 [영구 저장] 버튼이 생깁니다!
+    col_title, col_btn = st.columns([7, 3])
+    with col_title:
+        st.subheader("🤖 AI 페르소나 (성격 및 행동 규칙)")
+    with col_btn:
+        if st.button("💾 현재 설정 영구 저장하기", use_container_width=True):
+            payload = {
+                "persona": st.session_state.sando_persona,
+                "daily_notes": st.session_state.daily_notes,
+                "menu": st.session_state.menu_list
+            }
+            with st.spinner("구글 시트 금고에 안전하게 저장 중..."):
+                requests.post(DB_URL, json=payload)
+            st.success("✅ 저장이 완료되었습니다! 새로고침해도 유지됩니다.")
+    
     st.session_state.sando_persona = st.text_area("AI 행동 지침", value=st.session_state.sando_persona, height=220)
     
     st.markdown("---")
@@ -169,8 +176,6 @@ with tab1:
                         
                         위 규칙과 정보를 바탕으로 가장 마지막 고객의 질문에 대한 답변을 작성해.
                         """
-                        
-                        # 선택한 모델로 AI 구동!
                         genai.configure(api_key=st.session_state.gemini_api_key)
                         model = genai.GenerativeModel(st.session_state.selected_model)
                         response = model.generate_content(final_prompt)
