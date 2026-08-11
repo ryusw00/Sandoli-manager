@@ -88,7 +88,7 @@ with tab2:
         st.subheader("2. 메뉴 및 가격 관리")
         new_menu = st.data_editor(st.session_state.menu_list, num_rows="dynamic", use_container_width=True, key="menu_table_editor")
         
-        st.subheader("3. 오늘의 특이사항")
+        st.subheader("3. 기타 매장운영정보")
         new_notes = st.text_area("특이사항 입력", value=st.session_state.daily_notes, height=100, label_visibility="collapsed")
 
         st.markdown("---")
