@@ -7,6 +7,8 @@ st.set_page_config(page_title="산도리 메신저", page_icon="🍓", layout="c
 
 DB_URL = "https://script.google.com/macros/s/AKfycbz_43zmUq1z95JBauFRtiqtvMv2jxDV7neGmQca8w8Z-NmIKivvc88QVWIsTNccCZ_IIg/exec"
 
+# 🚨 속도 향상의 핵심: 3초 동안은 구글 시트를 거치지 않고 앱이 직접 기억해서 0.1초만에 보여줍니다!
+@st.cache_data(ttl=3)
 def load_sms_logs():
     try:
         response = requests.get(DB_URL + "?action=read")
@@ -22,6 +24,8 @@ def load_sms_logs():
         return []
     return []
 
+# 설정값은 10초 동안 기억하게 해서 로딩 속도를 극대화합니다!
+@st.cache_data(ttl=10)
 def load_settings():
     try:
         res = requests.get(DB_URL + "?action=read_settings")
@@ -32,9 +36,6 @@ def load_settings():
 sms_data = load_sms_logs()
 settings_data = load_settings()
 
-# ---------------------------------------------------------
-# 상태 초기화
-# ---------------------------------------------------------
 if 'sando_persona' not in st.session_state: st.session_state.sando_persona = settings_data.get("persona", "")
 if 'daily_notes' not in st.session_state: st.session_state.daily_notes = settings_data.get("daily_notes", "")
 if 'menu_list' not in st.session_state:
@@ -44,7 +45,6 @@ if 'menu_list' not in st.session_state:
     except:
         st.session_state.menu_list = [{"메뉴 이름": "", "가격": ""}]
 
-# 🚨 API 키와 웹훅 주소 모두 금고(Secrets)에서 불러오기!
 if 'gemini_api_key' not in st.session_state:
     try: st.session_state.gemini_api_key = st.secrets["GEMINI_API_KEY"]
     except: st.session_state.gemini_api_key = "" 
@@ -58,18 +58,13 @@ if 'current_chat' not in st.session_state: st.session_state.current_chat = None
 
 st.title("🍓 산도리 메신저")
 
-# 🚨 탭을 3개로 깔끔하게 분리했습니다!
 tab1, tab2, tab3 = st.tabs(["💬 메시지", "🍓 매장 및 AI 설정", "⚙️ 시스템 연결"])
 
-# ==========================================================
-# [탭 3] 시스템 연결 (가장 안 쓰는 메뉴를 뒤로 배치)
-# ==========================================================
 with tab3:
     st.info("💡 API 키와 웹훅 주소는 Streamlit Secrets(금고)에 안전하게 영구 보관 중입니다. 변경이 필요할 경우 대시보드에서 수정하세요.")
     st.subheader("🔑 시스템 필수 연결 확인")
     col_a, col_b = st.columns(2)
     with col_a: 
-        # 웹훅 주소도 보안을 위해 패스워드 처리(가림) 했습니다.
         st.session_state.webhook_url = st.text_input("🔗 웹훅 주소 (금고 연동됨)", value=st.session_state.webhook_url, type="password")
     with col_b:
         st.session_state.gemini_api_key = st.text_input("🧠 Gemini API 키 (금고 연동됨)", value=st.session_state.gemini_api_key, type="password")
@@ -86,11 +81,8 @@ with tab3:
                     st.session_state.selected_model = st.selectbox("🤖 AI 모델", available_models, index=idx)
             except: pass
 
-# ==========================================================
-# [탭 2] 매장 및 AI 설정 (사장님이 자주 쓰실 탭)
-# ==========================================================
 with tab2:
-    st.subheader("1. AI 행동 규칙")
+    st.subheader("1. AI 행동 규칙") 
     st.session_state.sando_persona = st.text_area("규칙 입력", value=st.session_state.sando_persona, height=150, label_visibility="collapsed")
     
     st.subheader("2. 메뉴 및 가격 관리")
@@ -102,15 +94,17 @@ with tab2:
 
     st.markdown("---")
     if st.button("💾 매장 설정 영구 저장하기", type="primary", use_container_width=True):
-        # 웹훅 주소는 금고로 넘어갔으므로 시트 저장 목록에서 뺐습니다.
         payload = {"persona": st.session_state.sando_persona, "daily_notes": st.session_state.daily_notes, "menu": st.session_state.menu_list}
         with st.spinner("구글 시트에 영구 저장 중..."): requests.post(DB_URL, json=payload)
+        st.cache_data.clear() # 🚨 저장하면 즉시 캐시(임시 기억)를 지워서 바로 반영되도록 함!
         st.success("✅ 매장 설정이 성공적으로 저장되었습니다!")
 
-# ==========================================================
-# [탭 1] 실시간 메시지 (메신저 UI)
-# ==========================================================
 with tab1:
+    # 🔄 새로고침 버튼 추가 (빠른 실시간 확인용)
+    if st.button("🔄 새로운 메시지 확인", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
     if st.session_state.current_chat is None:
         unique_phones = []
         for msg in reversed(sms_data):
@@ -189,5 +183,6 @@ with tab1:
                         requests.get(DB_URL, params={'phone': phone, 'msg': edited_msg, 'sender': '산도리'})
                         st.success("✅ 전송 완료!")
                         del st.session_state[f"draft_{phone}"]
+                        st.cache_data.clear() # 🚨 문자를 보내자마자 임시 기억을 지워서, 방금 보낸 문자가 즉시 화면에 뜨도록 함!
                         st.rerun()
                     except Exception as e: st.error(f"❌ 오류 발생: {e}")
