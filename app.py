@@ -32,6 +32,9 @@ def load_settings():
 sms_data = load_sms_logs()
 settings_data = load_settings()
 
+# ---------------------------------------------------------
+# 상태 초기화
+# ---------------------------------------------------------
 if 'sando_persona' not in st.session_state: st.session_state.sando_persona = settings_data.get("persona", "")
 if 'daily_notes' not in st.session_state: st.session_state.daily_notes = settings_data.get("daily_notes", "")
 if 'menu_list' not in st.session_state:
@@ -41,22 +44,36 @@ if 'menu_list' not in st.session_state:
     except:
         st.session_state.menu_list = [{"메뉴 이름": "", "가격": ""}]
 
-if 'webhook_url' not in st.session_state: st.session_state.webhook_url = settings_data.get("webhook_url", "") 
+# 🚨 API 키와 웹훅 주소 모두 금고(Secrets)에서 불러오기!
 if 'gemini_api_key' not in st.session_state:
     try: st.session_state.gemini_api_key = st.secrets["GEMINI_API_KEY"]
     except: st.session_state.gemini_api_key = "" 
+    
+if 'webhook_url' not in st.session_state:
+    try: st.session_state.webhook_url = st.secrets["WEBHOOK_URL"]
+    except: st.session_state.webhook_url = "" 
+    
 if 'selected_model' not in st.session_state: st.session_state.selected_model = "gemini-3.5-flash-lite"
 if 'current_chat' not in st.session_state: st.session_state.current_chat = None
 
 st.title("🍓 산도리 메신저")
-tab1, tab2 = st.tabs(["💬 메시지", "⚙️ 설정 및 AI 관리"])
 
-with tab2:
-    st.subheader("🔑 시스템 연결")
+# 🚨 탭을 3개로 깔끔하게 분리했습니다!
+tab1, tab2, tab3 = st.tabs(["💬 메시지", "🍓 매장 및 AI 설정", "⚙️ 시스템 연결"])
+
+# ==========================================================
+# [탭 3] 시스템 연결 (가장 안 쓰는 메뉴를 뒤로 배치)
+# ==========================================================
+with tab3:
+    st.info("💡 API 키와 웹훅 주소는 Streamlit Secrets(금고)에 안전하게 영구 보관 중입니다. 변경이 필요할 경우 대시보드에서 수정하세요.")
+    st.subheader("🔑 시스템 필수 연결 확인")
     col_a, col_b = st.columns(2)
-    with col_a: st.session_state.webhook_url = st.text_input("🔗 웹훅 주소", value=st.session_state.webhook_url)
+    with col_a: 
+        # 웹훅 주소도 보안을 위해 패스워드 처리(가림) 했습니다.
+        st.session_state.webhook_url = st.text_input("🔗 웹훅 주소 (금고 연동됨)", value=st.session_state.webhook_url, type="password")
     with col_b:
-        st.session_state.gemini_api_key = st.text_input("🧠 Gemini API 키", value=st.session_state.gemini_api_key, type="password")
+        st.session_state.gemini_api_key = st.text_input("🧠 Gemini API 키 (금고 연동됨)", value=st.session_state.gemini_api_key, type="password")
+        
         available_models = []
         if st.session_state.gemini_api_key:
             try:
@@ -68,21 +85,31 @@ with tab2:
                     idx = available_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_models else 0
                     st.session_state.selected_model = st.selectbox("🤖 AI 모델", available_models, index=idx)
             except: pass
-    
-    st.markdown("---")
+
+# ==========================================================
+# [탭 2] 매장 및 AI 설정 (사장님이 자주 쓰실 탭)
+# ==========================================================
+with tab2:
     st.subheader("1. AI 페르소나 (행동 규칙)")
     st.session_state.sando_persona = st.text_area("규칙 입력", value=st.session_state.sando_persona, height=150, label_visibility="collapsed")
+    
     st.subheader("2. 메뉴 및 가격 관리")
     edited_menu = st.data_editor(st.session_state.menu_list, num_rows="dynamic", use_container_width=True, key="menu_table_editor")
     st.session_state.menu_list = edited_menu
+    
     st.subheader("3. 오늘의 특이사항")
     st.session_state.daily_notes = st.text_area("특이사항 입력", value=st.session_state.daily_notes, height=100, label_visibility="collapsed")
-    st.markdown("---")
-    if st.button("💾 위 설정 모두 영구 저장하기", type="primary", use_container_width=True):
-        payload = {"persona": st.session_state.sando_persona, "daily_notes": st.session_state.daily_notes, "menu": st.session_state.menu_list, "webhook_url": st.session_state.webhook_url}
-        with st.spinner("구글 시트에 영구 저장 중..."): requests.post(DB_URL, json=payload)
-        st.success("✅ 모든 설정(웹훅 주소 포함)이 저장되었습니다!")
 
+    st.markdown("---")
+    if st.button("💾 매장 설정 영구 저장하기", type="primary", use_container_width=True):
+        # 웹훅 주소는 금고로 넘어갔으므로 시트 저장 목록에서 뺐습니다.
+        payload = {"persona": st.session_state.sando_persona, "daily_notes": st.session_state.daily_notes, "menu": st.session_state.menu_list}
+        with st.spinner("구글 시트에 영구 저장 중..."): requests.post(DB_URL, json=payload)
+        st.success("✅ 매장 설정이 성공적으로 저장되었습니다!")
+
+# ==========================================================
+# [탭 1] 실시간 메시지 (메신저 UI)
+# ==========================================================
 with tab1:
     if st.session_state.current_chat is None:
         unique_phones = []
@@ -133,7 +160,6 @@ with tab1:
         chat_html = '<div class="chat-bg">\n'
         for msg in filtered_msgs:
             role_class = "sando" if msg['sender'] == "산도리" else "user"
-            # 🚨 오류 수정 부분: 띄어쓰기를 없애고 한 줄로 강제 병합했습니다!
             chat_html += f'<div class="msg-row {role_class}"><div class="bubble">{msg["message"]}</div><div class="time">{msg["time"]}</div></div>\n'
             chat_history_str += f"{msg['sender']}: {msg['message']}\n"
         chat_html += '</div>'
@@ -142,7 +168,7 @@ with tab1:
         formatted_menu_text = "\n".join([f"- {item['메뉴 이름']}: {item['가격']}" for item in st.session_state.menu_list if item.get('메뉴 이름')])
         
         if st.button("✨ AI 답변 초안 생성", key=f"ai_btn_{phone}"):
-            if not st.session_state.gemini_api_key: st.error("❌ Gemini API 키를 입력해주세요!")
+            if not st.session_state.gemini_api_key: st.error("❌ 시스템 연결 탭에서 Gemini API 키를 확인해주세요!")
             else:
                 with st.spinner("AI가 최적의 답변을 작성 중입니다..."):
                     try:
@@ -156,7 +182,7 @@ with tab1:
         if f"draft_{phone}" in st.session_state:
             edited_msg = st.text_area("📝 답변 발송 (수정 가능)", value=st.session_state[f"draft_{phone}"], height=120)
             if st.button("🚀 문자로 전송하기", type="primary", use_container_width=True, key=f"send_btn_{phone}"):
-                if not st.session_state.webhook_url: st.error("❌ 설정 탭에서 웹훅 주소를 먼저 입력 및 저장해주세요!")
+                if not st.session_state.webhook_url: st.error("❌ 시스템 연결 탭에서 웹훅 주소를 확인해주세요!")
                 else:
                     try:
                         requests.get(st.session_state.webhook_url, params={'phone': phone, 'msg': edited_msg})
