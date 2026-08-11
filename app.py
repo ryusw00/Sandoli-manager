@@ -35,7 +35,7 @@ def load_sms_logs():
 sms_data = load_sms_logs()
 
 # ---------------------------------------------------------
-# 3. AI 페르소나 및 설정 메모리 초기화
+# 3. 세션 초기화
 # ---------------------------------------------------------
 if 'sando_persona' not in st.session_state:
     st.session_state.sando_persona = """당신은 프리미엄 디저트 카페 '산도리(sando.li)'의 친절하고 전문적인 고객 응대 매니저입니다.
@@ -59,13 +59,10 @@ if 'daily_notes' not in st.session_state:
     st.session_state.daily_notes = "오늘 백자 메론 당도가 매우 높습니다! 딸기 산도는 품절 임박입니다."
 if 'webhook_url' not in st.session_state:
     st.session_state.webhook_url = ""
-
-# 🚨 이 부분이 핵심입니다! 금고(secrets)에 키가 있으면 자동으로 가져오도록 변경!
 if 'gemini_api_key' not in st.session_state:
-    try:
-        st.session_state.gemini_api_key = st.secrets["GEMINI_API_KEY"]
-    except:
-        st.session_state.gemini_api_key = "" 
+    st.session_state.gemini_api_key = "" 
+if 'selected_model' not in st.session_state:
+    st.session_state.selected_model = "gemini-3.5-flash-lite" # 기본값
 
 # ---------------------------------------------------------
 # 4. 왼쪽 사이드바
@@ -94,9 +91,29 @@ with tab2:
     st.subheader("🔑 시스템 필수 연결")
     col_a, col_b = st.columns(2)
     with col_a:
-        st.session_state.webhook_url = st.text_input("🔗 매크로드로이드 웹훅 발송 주소", value=st.session_state.webhook_url)
+        st.session_state.webhook_url = st.text_input("🔗 웹훅 발송 주소", value=st.session_state.webhook_url)
     with col_b:
         st.session_state.gemini_api_key = st.text_input("🧠 Gemini API 키", value=st.session_state.gemini_api_key, type="password")
+        
+        # 🚨 [새로 추가된 기능] API 키가 입력되면 사용 가능한 모델 목록을 불러와 선택창으로 보여줌
+        available_models = []
+        if st.session_state.gemini_api_key:
+            try:
+                genai.configure(api_key=st.session_state.gemini_api_key)
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        available_models.append(m.name.replace("models/", ""))
+                        
+                if available_models:
+                    # 기존 선택된 모델이 리스트에 있으면 그 위치를 찾고, 없으면 0번째 선택
+                    idx = available_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_models else 0
+                    st.session_state.selected_model = st.selectbox("🤖 사용할 AI 모델 선택 (자동 로드됨)", available_models, index=idx)
+                else:
+                    st.warning("사용 가능한 모델을 찾을 수 없습니다.")
+            except Exception as e:
+                st.error("API 키가 올바르지 않거나 모델을 불러올 수 없습니다.")
+        else:
+            st.info("API 키를 입력하면 선택 가능한 AI 모델 목록이 나타납니다.")
     
     st.markdown("---")
     st.subheader("🤖 AI 페르소나 (성격 및 행동 규칙)")
@@ -133,7 +150,7 @@ with tab1:
             if not st.session_state.gemini_api_key:
                 st.error("❌ [설정] 탭에서 Gemini API 키를 먼저 입력해주세요!")
             else:
-                with st.spinner("AI가 최적의 답변을 고민하고 있습니다... 🍓"):
+                with st.spinner(f"{st.session_state.selected_model} 모델이 최적의 답변을 고민하고 있습니다... 🍓"):
                     try:
                         final_prompt = f"""
                         {st.session_state.sando_persona}
@@ -150,8 +167,9 @@ with tab1:
                         위 규칙과 정보를 바탕으로 가장 마지막 고객의 질문에 대한 답변을 작성해.
                         """
                         
+                        # 선택한 모델로 AI 구동!
                         genai.configure(api_key=st.session_state.gemini_api_key)
-                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        model = genai.GenerativeModel(st.session_state.selected_model)
                         response = model.generate_content(final_prompt)
                         
                         st.session_state[f"draft_{selected_phone}"] = response.text
