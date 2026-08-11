@@ -60,7 +60,10 @@ if 'daily_notes' not in st.session_state:
 if 'webhook_url' not in st.session_state:
     st.session_state.webhook_url = ""
 if 'gemini_api_key' not in st.session_state:
-    st.session_state.gemini_api_key = "" 
+    try:
+        st.session_state.gemini_api_key = st.secrets["GEMINI_API_KEY"]
+    except:
+        st.session_state.gemini_api_key = "" 
 if 'selected_model' not in st.session_state:
     st.session_state.selected_model = "gemini-3.5-flash-lite" # 기본값
 
