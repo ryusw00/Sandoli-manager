@@ -90,7 +90,7 @@ with tab3:
 # [탭 2] 매장 및 AI 설정 (사장님이 자주 쓰실 탭)
 # ==========================================================
 with tab2:
-    st.subheader("1. AI 페르소나 (행동 규칙)")
+    st.subheader("1. AI 행동 규칙")
     st.session_state.sando_persona = st.text_area("규칙 입력", value=st.session_state.sando_persona, height=150, label_visibility="collapsed")
     
     st.subheader("2. 메뉴 및 가격 관리")
