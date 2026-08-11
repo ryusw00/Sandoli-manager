@@ -7,7 +7,6 @@ st.set_page_config(page_title="산도리 메신저", page_icon="🍓", layout="c
 
 DB_URL = "https://script.google.com/macros/s/AKfycbz_43zmUq1z95JBauFRtiqtvMv2jxDV7neGmQca8w8Z-NmIKivvc88QVWIsTNccCZ_IIg/exec"
 
-# 🚨 속도 향상의 핵심: 3초 동안은 구글 시트를 거치지 않고 앱이 직접 기억해서 0.1초만에 보여줍니다!
 @st.cache_data(ttl=3)
 def load_sms_logs():
     try:
@@ -24,7 +23,6 @@ def load_sms_logs():
         return []
     return []
 
-# 설정값은 10초 동안 기억하게 해서 로딩 속도를 극대화합니다!
 @st.cache_data(ttl=10)
 def load_settings():
     try:
@@ -82,25 +80,33 @@ with tab3:
             except: pass
 
 with tab2:
-    st.subheader("1. AI 행동 규칙") 
-    st.session_state.sando_persona = st.text_area("규칙 입력", value=st.session_state.sando_persona, height=150, label_visibility="collapsed")
-    
-    st.subheader("2. 메뉴 및 가격 관리")
-    edited_menu = st.data_editor(st.session_state.menu_list, num_rows="dynamic", use_container_width=True, key="menu_table_editor")
-    st.session_state.menu_list = edited_menu
-    
-    st.subheader("3. 오늘의 특이사항")
-    st.session_state.daily_notes = st.text_area("특이사항 입력", value=st.session_state.daily_notes, height=100, label_visibility="collapsed")
+    # 🚨 여기에 장바구니(st.form) 기능을 씌워서 입력 중 화면 깜빡임을 완벽히 차단했습니다!
+    with st.form(key="settings_form"):
+        st.subheader("1. AI 행동 규칙") 
+        new_persona = st.text_area("규칙 입력", value=st.session_state.sando_persona, height=150, label_visibility="collapsed")
+        
+        st.subheader("2. 메뉴 및 가격 관리")
+        new_menu = st.data_editor(st.session_state.menu_list, num_rows="dynamic", use_container_width=True, key="menu_table_editor")
+        
+        st.subheader("3. 오늘의 특이사항")
+        new_notes = st.text_area("특이사항 입력", value=st.session_state.daily_notes, height=100, label_visibility="collapsed")
 
-    st.markdown("---")
-    if st.button("💾 매장 설정 영구 저장하기", type="primary", use_container_width=True):
-        payload = {"persona": st.session_state.sando_persona, "daily_notes": st.session_state.daily_notes, "menu": st.session_state.menu_list}
-        with st.spinner("구글 시트에 영구 저장 중..."): requests.post(DB_URL, json=payload)
-        st.cache_data.clear() # 🚨 저장하면 즉시 캐시(임시 기억)를 지워서 바로 반영되도록 함!
-        st.success("✅ 매장 설정이 성공적으로 저장되었습니다!")
+        st.markdown("---")
+        # 폼 안에서는 저장 버튼을 누를 때만 내용이 한 번에 묶여서 처리됩니다.
+        submitted = st.form_submit_button("💾 매장 설정 영구 저장하기", type="primary", use_container_width=True)
+        
+        if submitted:
+            st.session_state.sando_persona = new_persona
+            st.session_state.menu_list = new_menu
+            st.session_state.daily_notes = new_notes
+            
+            payload = {"persona": new_persona, "daily_notes": new_notes, "menu": new_menu}
+            with st.spinner("구글 시트에 영구 저장 중..."): 
+                requests.post(DB_URL, json=payload)
+            st.cache_data.clear() 
+            st.success("✅ 매장 설정이 성공적으로 저장되었습니다!")
 
 with tab1:
-    # 🔄 새로고침 버튼 추가 (빠른 실시간 확인용)
     if st.button("🔄 새로운 메시지 확인", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -183,6 +189,6 @@ with tab1:
                         requests.get(DB_URL, params={'phone': phone, 'msg': edited_msg, 'sender': '산도리'})
                         st.success("✅ 전송 완료!")
                         del st.session_state[f"draft_{phone}"]
-                        st.cache_data.clear() # 🚨 문자를 보내자마자 임시 기억을 지워서, 방금 보낸 문자가 즉시 화면에 뜨도록 함!
+                        st.cache_data.clear() 
                         st.rerun()
                     except Exception as e: st.error(f"❌ 오류 발생: {e}")
