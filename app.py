@@ -7,6 +7,17 @@ st.set_page_config(page_title="산도리 메신저", page_icon="🍓", layout="c
 
 DB_URL = "https://script.google.com/macros/s/AKfycbz_43zmUq1z95JBauFRtiqtvMv2jxDV7neGmQca8w8Z-NmIKivvc88QVWIsTNccCZ_IIg/exec"
 
+# 기본 요일별 영업시간 템플릿
+DEFAULT_HOURS = [
+    {"요일": "월요일", "영업여부": True, "오픈시간": "11:00", "마감시간": "20:00", "비고": ""},
+    {"요일": "화요일", "영업여부": True, "오픈시간": "11:00", "마감시간": "20:00", "비고": ""},
+    {"요일": "수요일", "영업여부": True, "오픈시간": "11:00", "마감시간": "20:00", "비고": ""},
+    {"요일": "목요일", "영업여부": True, "오픈시간": "11:00", "마감시간": "20:00", "비고": ""},
+    {"요일": "금요일", "영업여부": True, "오픈시간": "11:00", "마감시간": "20:00", "비고": ""},
+    {"요일": "토요일", "영업여부": True, "오픈시간": "11:00", "마감시간": "20:00", "비고": ""},
+    {"요일": "일요일", "영업여부": True, "오픈시간": "11:00", "마감시간": "20:00", "비고": ""},
+]
+
 @st.cache_data(ttl=3)
 def load_sms_logs():
     try:
@@ -34,14 +45,22 @@ def load_settings():
 sms_data = load_sms_logs()
 settings_data = load_settings()
 
+# 세션 상태 초기화
 if 'sando_persona' not in st.session_state: st.session_state.sando_persona = settings_data.get("persona", "")
-if 'daily_notes' not in st.session_state: st.session_state.daily_notes = settings_data.get("daily_notes", "")
+if 'store_info' not in st.session_state: st.session_state.store_info = settings_data.get("store_info", settings_data.get("daily_notes", ""))
 if 'menu_list' not in st.session_state:
     try:
         saved_menu = json.loads(settings_data.get("menu", "[]"))
         st.session_state.menu_list = saved_menu if saved_menu else [{"메뉴 이름": "", "가격": ""}]
     except:
         st.session_state.menu_list = [{"메뉴 이름": "", "가격": ""}]
+
+if 'business_hours' not in st.session_state:
+    try:
+        saved_hours = json.loads(settings_data.get("business_hours", "[]"))
+        st.session_state.business_hours = saved_hours if saved_hours else DEFAULT_HOURS
+    except:
+        st.session_state.business_hours = DEFAULT_HOURS
 
 if 'gemini_api_key' not in st.session_state:
     try: st.session_state.gemini_api_key = st.secrets["GEMINI_API_KEY"]
@@ -80,27 +99,54 @@ with tab3:
             except: pass
 
 with tab2:
-    # 🚨 여기에 장바구니(st.form) 기능을 씌워서 입력 중 화면 깜빡임을 완벽히 차단했습니다!
     with st.form(key="settings_form"):
         st.subheader("1. AI 행동 규칙") 
-        new_persona = st.text_area("규칙 입력", value=st.session_state.sando_persona, height=150, label_visibility="collapsed")
+        new_persona = st.text_area("규칙 입력", value=st.session_state.sando_persona, height=140, label_visibility="collapsed")
         
         st.subheader("2. 메뉴 및 가격 관리")
         new_menu = st.data_editor(st.session_state.menu_list, num_rows="dynamic", use_container_width=True, key="menu_table_editor")
         
-        st.subheader("3. 기타 매장운영정보")
-        new_notes = st.text_area("특이사항 입력", value=st.session_state.daily_notes, height=100, label_visibility="collapsed")
+        st.subheader("3. 영업시간 (월~일)")
+        st.caption("💡 영업하는 요일은 체크(☑️)하고 오픈/마감 시간을 입력하세요. 정기휴무일은 체크를 해제하시면 됩니다.")
+        new_hours = st.data_editor(
+            st.session_state.business_hours,
+            column_config={
+                "요일": st.column_config.TextColumn("요일", disabled=True),
+                "영업여부": st.column_config.CheckboxColumn("영업일 여부", default=True),
+                "오픈시간": st.column_config.TextColumn("오픈 시간", default="11:00"),
+                "마감시간": st.column_config.TextColumn("마감 시간", default="20:00"),
+                "비고": st.column_config.TextColumn("비고 (라스트오더 등)", default="")
+            },
+            num_rows="fixed",
+            use_container_width=True,
+            key="hours_table_editor"
+        )
+
+        st.subheader("4. 기타 매장운영 정보")
+        new_store_info = st.text_area(
+            "기타 매장운영 정보 입력",
+            value=st.session_state.store_info,
+            height=120,
+            placeholder="예: \n- 주차: 매장 앞 1대 가능 / 인근 공영주차장 이용\n- 예약: 당일 픽업 예약 가능 (포장 위주)\n- 재료 소진 시 조기 마감될 수 있습니다.",
+            label_visibility="collapsed"
+        )
 
         st.markdown("---")
-        # 폼 안에서는 저장 버튼을 누를 때만 내용이 한 번에 묶여서 처리됩니다.
         submitted = st.form_submit_button("💾 매장 설정 영구 저장하기", type="primary", use_container_width=True)
         
         if submitted:
             st.session_state.sando_persona = new_persona
             st.session_state.menu_list = new_menu
-            st.session_state.daily_notes = new_notes
+            st.session_state.business_hours = new_hours
+            st.session_state.store_info = new_store_info
             
-            payload = {"persona": new_persona, "daily_notes": new_notes, "menu": new_menu}
+            payload = {
+                "persona": new_persona,
+                "menu": new_menu,
+                "business_hours": new_hours,
+                "store_info": new_store_info,
+                "daily_notes": new_store_info
+            }
             with st.spinner("구글 시트에 영구 저장 중..."): 
                 requests.post(DB_URL, json=payload)
             st.cache_data.clear() 
@@ -165,14 +211,38 @@ with tab1:
         chat_html += '</div>'
         st.markdown(chat_html, unsafe_allow_html=True)
         
+        # 메뉴 및 영업시간 포맷팅
         formatted_menu_text = "\n".join([f"- {item['메뉴 이름']}: {item['가격']}" for item in st.session_state.menu_list if item.get('메뉴 이름')])
+        
+        formatted_hours_list = []
+        for h in st.session_state.business_hours:
+            if h.get("영업여부", True):
+                extra = f" ({h['비고']})" if h.get("비고") else ""
+                formatted_hours_list.append(f"- {h['요일']}: {h['오픈시간']} ~ {h['마감시간']}{extra}")
+            else:
+                formatted_hours_list.append(f"- {h['요일']}: 정기휴무")
+        formatted_hours_text = "\n".join(formatted_hours_list)
         
         if st.button("✨ AI 답변 초안 생성", key=f"ai_btn_{phone}"):
             if not st.session_state.gemini_api_key: st.error("❌ 시스템 연결 탭에서 Gemini API 키를 확인해주세요!")
             else:
                 with st.spinner("AI가 최적의 답변을 작성 중입니다..."):
                     try:
-                        final_prompt = f"{st.session_state.sando_persona}\n\n[메뉴/가격]\n{formatted_menu_text}\n\n[특이사항]\n{st.session_state.daily_notes}\n\n[과거 대화 맥락]\n{chat_history_str}\n\n위 정보를 바탕으로 마지막 질문에 답해."
+                        final_prompt = f"""{st.session_state.sando_persona}
+
+[메뉴/가격]
+{formatted_menu_text}
+
+[매장 영업시간]
+{formatted_hours_text}
+
+[기타 매장운영 정보]
+{st.session_state.store_info}
+
+[과거 대화 맥락]
+{chat_history_str}
+
+위 정보를 바탕으로 고객의 마지막 질문에 친절하고 정확하게 답해줘."""
                         genai.configure(api_key=st.session_state.gemini_api_key)
                         model = genai.GenerativeModel(st.session_state.selected_model)
                         response = model.generate_content(final_prompt)
