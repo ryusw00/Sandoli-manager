@@ -8,6 +8,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="산도리 메신저", page_icon="🍓", layout="centered") 
 
 DB_URL = "https://script.google.com/macros/s/AKfycbz_43zmUq1z95JBauFRtiqtvMv2jxDV7neGmQca8w8Z-NmIKivvc88QVWIsTNccCZ_IIg/exec"
+INSTAGRAM_PREFIX = "instagram:"
 
 # 기본 요일별 영업시간 템플릿
 DEFAULT_HOURS = [
@@ -55,6 +56,56 @@ def normalize_korean_mobile(value):
     if digits.startswith("82"):
         digits = "0" + digits[2:]
     return digits
+
+def build_conversation_id(channel, title):
+    """문자 번호와 인스타 계정이 같은 메시지 저장소에서 충돌하지 않게 구분합니다."""
+    if channel == "문자":
+        phone = normalize_korean_mobile(title)
+        if not re.fullmatch(r"010\d{8}", phone):
+            raise ValueError("문자 대화는 010으로 시작하는 휴대전화 번호 11자리를 입력해주세요.")
+        return phone
+
+    account = str(title).strip()
+    if not account:
+        raise ValueError("인스타그램 대화는 고객 계정명이나 구분 이름을 입력해주세요.")
+    if account.lower().startswith(INSTAGRAM_PREFIX):
+        account = account[len(INSTAGRAM_PREFIX):].strip()
+    return INSTAGRAM_PREFIX + account
+
+def is_instagram_conversation(conversation_id):
+    return str(conversation_id).lower().startswith(INSTAGRAM_PREFIX)
+
+def conversation_label(conversation_id):
+    if is_instagram_conversation(conversation_id):
+        account = str(conversation_id)[len(INSTAGRAM_PREFIX):]
+        return f"📷 인스타 · {account}"
+    return f"📞 {conversation_id}"
+
+def save_restored_messages(channel, title, messages):
+    """복원 메시지를 기존 구글 시트 대화 저장소에 순서대로 추가합니다."""
+    conversation_id = build_conversation_id(channel, title)
+    saved_count = 0
+    total_count = len(messages)
+
+    for item in messages:
+        try:
+            response = requests.get(
+                DB_URL,
+                params={
+                    "phone": conversation_id,
+                    "msg": str(item.get("내용", "")).strip(),
+                    "sender": "산도리" if item.get("보낸 사람") == "산도리" else "고객",
+                    "original_time": str(item.get("시간", "")).strip(),
+                    "source": "screenshot_restore",
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            saved_count += 1
+        except Exception as exc:
+            raise RuntimeError(f"{saved_count}/{total_count}개 저장 후 중단되었습니다: {exc}") from exc
+
+    return conversation_id, saved_count
 
 def parse_conversation_json(raw_text):
     """Gemini가 반환한 JSON에서 대화 내용을 안전하게 꺼냅니다."""
@@ -248,8 +299,12 @@ if 'selected_model' not in st.session_state: st.session_state.selected_model = "
 if 'current_chat' not in st.session_state: st.session_state.current_chat = None
 if 'restored_conversation' not in st.session_state: st.session_state.restored_conversation = None
 if 'restore_revision' not in st.session_state: st.session_state.restore_revision = 0
+if 'saved_restore_revision' not in st.session_state: st.session_state.saved_restore_revision = -1
 
 st.title("🍓 산도리 메신저")
+
+if "restore_save_notice" in st.session_state:
+    st.success(st.session_state.pop("restore_save_notice"))
 
 st.markdown("""
 <style>
@@ -430,6 +485,36 @@ with tab_restore:
         st.markdown("##### 복원된 대화")
         render_chat(restored_messages)
 
+        already_saved = st.session_state.saved_restore_revision == revision
+        if st.button(
+            "✅ 메시지 목록에 저장됨" if already_saved else "💾 복원 대화를 메시지 목록에 저장",
+            type="secondary" if already_saved else "primary",
+            use_container_width=True,
+            disabled=already_saved,
+            key=f"restore_save_{revision}",
+        ):
+            if not restored_messages:
+                st.error("저장할 대화 내용이 없습니다.")
+            else:
+                with st.spinner("복원한 대화를 메시지 목록에 저장 중입니다..."):
+                    try:
+                        conversation_id, saved_count = save_restored_messages(
+                            channel,
+                            conversation_title,
+                            restored_messages,
+                        )
+                        st.session_state.saved_restore_revision = revision
+                        st.session_state.current_chat = conversation_id
+                        st.session_state.restore_save_notice = (
+                            f"✅ 복원 메시지 {saved_count}개를 메시지 목록에 저장했습니다."
+                        )
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ 메시지 목록에 저장하지 못했습니다: {e}")
+
+        st.caption("저장된 대화의 목록 시간은 현재 구글 시트 구조에 따라 복원한 시각으로 표시됩니다.")
+
         export_data = {
             "channel": channel,
             "conversation_title": conversation_title,
@@ -526,10 +611,10 @@ with tab1:
                         sender_prefix = "산도리: " if last_msg['sender'] == "산도리" else ""
                         preview_text = sender_prefix + last_msg['message']
                         if len(preview_text) > 30: preview_text = preview_text[:30] + "..." 
-                        safe_phone = html.escape(str(phone))
+                        safe_label = html.escape(conversation_label(phone))
                         safe_time = html.escape(str(last_msg['time']))
                         safe_preview = html.escape(str(preview_text))
-                        st.markdown(f"<strong style='font-size:16px;'>📞 {safe_phone}</strong> &nbsp;&nbsp;<span style='color:#a0a0a0; font-size:12px;'>{safe_time}</span>", unsafe_allow_html=True)
+                        st.markdown(f"<strong style='font-size:16px;'>{safe_label}</strong> &nbsp;&nbsp;<span style='color:#a0a0a0; font-size:12px;'>{safe_time}</span>", unsafe_allow_html=True)
                         st.markdown(f"<span style='color:#666; font-size:14px;'>{safe_preview}</span>", unsafe_allow_html=True)
                     with col_btn:
                         st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
@@ -543,7 +628,7 @@ with tab1:
             st.session_state.current_chat = None
             st.rerun()
             
-        st.subheader(f"📞 {phone}")
+        st.subheader(conversation_label(phone))
         filtered_msgs = [msg for msg in sms_data if msg['phone'] == phone]
         render_chat(filtered_msgs)
         chat_history_str = "\n".join(f"{msg['sender']}: {msg['message']}" for msg in filtered_msgs)
@@ -587,8 +672,12 @@ with tab1:
                     except Exception as e: st.error(f"❌ 오류: {e}")
         
         if f"draft_{phone}" in st.session_state:
-            edited_msg = st.text_area("📝 답변 발송 (수정 가능)", value=st.session_state[f"draft_{phone}"], height=120)
-            if st.button("🚀 문자로 전송하기", type="primary", use_container_width=True, key=f"send_btn_{phone}"):
+            editor_label = "📝 DM 답변 초안 (수정 가능)" if is_instagram_conversation(phone) else "📝 답변 발송 (수정 가능)"
+            edited_msg = st.text_area(editor_label, value=st.session_state[f"draft_{phone}"], height=120)
+
+            if is_instagram_conversation(phone):
+                st.info("인스타그램 자동 전송은 연결되어 있지 않습니다. 위 초안을 복사해 DM에 붙여넣어 주세요.")
+            elif st.button("🚀 문자로 전송하기", type="primary", use_container_width=True, key=f"send_btn_{phone}"):
                 if not st.session_state.webhook_url: st.error("❌ 시스템 연결 탭에서 웹훅 주소를 확인해주세요!")
                 else:
                     try:
