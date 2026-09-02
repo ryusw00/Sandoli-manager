@@ -29,9 +29,15 @@ def load_sms_logs():
             raw_data = response.json()
             if len(raw_data) <= 1: return []
             logs = []
+            seen_messages = set()
             for row in raw_data[1:]:
                 if len(row) >= 4:
-                    logs.append({"time": row[0], "phone": str("0" + str(row[1])) if str(row[1]).startswith("10") else str(row[1]), "message": row[2], "sender": row[3]})
+                    conversation_id = canonical_conversation_id(row[1])
+                    fingerprint = (conversation_id, *message_fingerprint(row[3], row[2]))
+                    if fingerprint in seen_messages:
+                        continue
+                    seen_messages.add(fingerprint)
+                    logs.append({"time": row[0], "phone": conversation_id, "message": row[2], "sender": row[3]})
             return logs
     except:
         return []
@@ -55,12 +61,37 @@ def normalize_korean_mobile(value):
     digits = re.sub(r"\D", "", str(value))
     if digits.startswith("82"):
         digits = "0" + digits[2:]
+    elif re.fullmatch(r"10\d{8}", digits):
+        digits = "0" + digits
     return digits
+
+def canonical_conversation_id(value):
+    """하이픈 유무와 시트의 숫자 변환에 관계없이 같은 번호를 같은 ID로 만듭니다."""
+    raw_value = str(value).strip()
+    if raw_value.lower().startswith(INSTAGRAM_PREFIX):
+        account = raw_value[len(INSTAGRAM_PREFIX):].strip()
+        return INSTAGRAM_PREFIX + account
+
+    phone = normalize_korean_mobile(raw_value)
+    if re.fullmatch(r"010\d{8}", phone):
+        return phone
+    return raw_value
+
+def format_mobile_number(value):
+    phone = normalize_korean_mobile(value)
+    if re.fullmatch(r"010\d{8}", phone):
+        return f"{phone[:3]}-{phone[3:7]}-{phone[7:]}"
+    return str(value)
+
+def message_fingerprint(sender, message):
+    normalized_sender = "산도리" if str(sender).strip() == "산도리" else "고객"
+    normalized_message = re.sub(r"\s+", " ", str(message)).strip()
+    return normalized_sender, normalized_message
 
 def build_conversation_id(channel, title):
     """문자 번호와 인스타 계정이 같은 메시지 저장소에서 충돌하지 않게 구분합니다."""
     if channel == "문자":
-        phone = normalize_korean_mobile(title)
+        phone = canonical_conversation_id(title)
         if not re.fullmatch(r"010\d{8}", phone):
             raise ValueError("문자 대화는 010으로 시작하는 휴대전화 번호 11자리를 입력해주세요.")
         return phone
@@ -79,15 +110,30 @@ def conversation_label(conversation_id):
     if is_instagram_conversation(conversation_id):
         account = str(conversation_id)[len(INSTAGRAM_PREFIX):]
         return f"📷 인스타 · {account}"
-    return f"📞 {conversation_id}"
+    return f"📞 {format_mobile_number(conversation_id)}"
 
-def save_restored_messages(channel, title, messages):
+def save_restored_messages(channel, title, messages, existing_logs):
     """복원 메시지를 기존 구글 시트 대화 저장소에 순서대로 추가합니다."""
     conversation_id = build_conversation_id(channel, title)
-    saved_count = 0
-    total_count = len(messages)
-
+    existing_fingerprints = {
+        message_fingerprint(item.get("sender"), item.get("message"))
+        for item in existing_logs
+        if canonical_conversation_id(item.get("phone", "")) == conversation_id
+    }
+    messages_to_save = []
+    skipped_count = 0
     for item in messages:
+        fingerprint = message_fingerprint(item.get("보낸 사람"), item.get("내용"))
+        if not fingerprint[1] or fingerprint in existing_fingerprints:
+            skipped_count += 1
+            continue
+        existing_fingerprints.add(fingerprint)
+        messages_to_save.append(item)
+
+    saved_count = 0
+    total_count = len(messages_to_save)
+
+    for item in messages_to_save:
         try:
             response = requests.get(
                 DB_URL,
@@ -105,7 +151,7 @@ def save_restored_messages(channel, title, messages):
         except Exception as exc:
             raise RuntimeError(f"{saved_count}/{total_count}개 저장 후 중단되었습니다: {exc}") from exc
 
-    return conversation_id, saved_count
+    return conversation_id, saved_count, skipped_count
 
 def parse_conversation_json(raw_text):
     """Gemini가 반환한 JSON에서 대화 내용을 안전하게 꺼냅니다."""
@@ -447,12 +493,43 @@ with tab_restore:
             horizontal=True,
             key=f"restore_channel_{revision}",
         )
-        conversation_title = st.text_input(
-            "고객 구분",
-            value=restored.get("conversation_title", ""),
-            placeholder="전화번호 또는 인스타그램 계정명",
-            key=f"restore_title_{revision}",
-        )
+
+        detected_title = restored.get("conversation_title", "")
+        if channel == "문자":
+            direct_entry = "새 번호 직접 입력"
+            existing_sms_conversations = list(dict.fromkeys(
+                item["phone"] for item in sms_data
+                if not is_instagram_conversation(item["phone"])
+                and re.fullmatch(r"010\d{8}", canonical_conversation_id(item["phone"]))
+            ))
+            target_options = [direct_entry, *existing_sms_conversations]
+            detected_id = canonical_conversation_id(detected_title)
+            default_target_index = target_options.index(detected_id) if detected_id in target_options else 0
+            selected_target = st.selectbox(
+                "저장할 문자 대화",
+                target_options,
+                index=default_target_index,
+                format_func=lambda value: value if value == direct_entry else conversation_label(value),
+                key=f"restore_sms_target_{revision}",
+                help="기존 번호를 선택하면 그 사람의 대화에 합쳐집니다.",
+            )
+            if selected_target == direct_entry:
+                conversation_title = st.text_input(
+                    "고객 전화번호",
+                    value=detected_title,
+                    placeholder="010-1234-5678",
+                    key=f"restore_title_{revision}",
+                )
+            else:
+                conversation_title = selected_target
+                st.caption(f"{conversation_label(selected_target)} 대화에 합쳐서 저장합니다.")
+        else:
+            conversation_title = st.text_input(
+                "인스타그램 고객 구분",
+                value=detected_title,
+                placeholder="인스타그램 계정명 또는 고객 이름",
+                key=f"restore_title_{revision}",
+            )
 
         if restored.get("warnings"):
             with st.expander("⚠️ AI가 확인을 요청한 부분", expanded=True):
@@ -498,16 +575,18 @@ with tab_restore:
             else:
                 with st.spinner("복원한 대화를 메시지 목록에 저장 중입니다..."):
                     try:
-                        conversation_id, saved_count = save_restored_messages(
+                        conversation_id, saved_count, skipped_count = save_restored_messages(
                             channel,
                             conversation_title,
                             restored_messages,
+                            sms_data,
                         )
                         st.session_state.saved_restore_revision = revision
                         st.session_state.current_chat = conversation_id
-                        st.session_state.restore_save_notice = (
-                            f"✅ 복원 메시지 {saved_count}개를 메시지 목록에 저장했습니다."
-                        )
+                        notice = f"✅ 새 메시지 {saved_count}개를 메시지 목록에 저장했습니다."
+                        if skipped_count:
+                            notice += f" 기존과 중복된 {skipped_count}개는 제외했습니다."
+                        st.session_state.restore_save_notice = notice
                         st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
