@@ -29,14 +29,11 @@ def load_sms_logs():
             raw_data = response.json()
             if len(raw_data) <= 1: return []
             logs = []
-            seen_messages = set()
+            # 같은 내용도 별개의 문자일 수 있으므로 저장된 행을 그대로 표시합니다.
+            # 중복 수신 여부는 본문이나 시각 대신 고유 메시지 ID로 판단해야 합니다.
             for row in raw_data[1:]:
                 if len(row) >= 4:
                     conversation_id = canonical_conversation_id(row[1])
-                    fingerprint = (conversation_id, *message_fingerprint(row[3], row[2]))
-                    if fingerprint in seen_messages:
-                        continue
-                    seen_messages.add(fingerprint)
                     logs.append({"time": row[0], "phone": conversation_id, "message": row[2], "sender": row[3]})
             return logs
     except:
@@ -349,6 +346,9 @@ if 'saved_restore_revision' not in st.session_state: st.session_state.saved_rest
 
 st.title("🍓 산도리 메신저")
 
+if "sms_send_notice" in st.session_state:
+    st.success(st.session_state.pop("sms_send_notice"))
+
 if "restore_save_notice" in st.session_state:
     st.success(st.session_state.pop("restore_save_notice"))
 
@@ -656,13 +656,8 @@ with tab_restore:
                                 timeout=15,
                             )
                             send_response.raise_for_status()
-                            log_response = requests.get(
-                                DB_URL,
-                                params={"phone": phone, "msg": edited_draft, "sender": "산도리"},
-                                timeout=15,
-                            )
-                            log_response.raise_for_status()
-                            st.success("✅ 문자를 전송하고 발송 기록을 저장했습니다.")
+                            # 발신 기록은 영업용폰의 MacroDroid가 저장합니다.
+                            st.success("✅ 영업용폰에 문자 발송을 요청했습니다. 발신 기록은 휴대폰에서 등록된 뒤 ‘새로운 메시지 확인’을 누르면 표시됩니다.")
                             st.cache_data.clear()
                         except Exception as e:
                             st.error(f"❌ 문자 전송 중 오류가 발생했습니다: {e}")
@@ -760,9 +755,14 @@ with tab1:
                 if not st.session_state.webhook_url: st.error("❌ 시스템 연결 탭에서 웹훅 주소를 확인해주세요!")
                 else:
                     try:
-                        requests.get(st.session_state.webhook_url, params={'phone': phone, 'msg': edited_msg})
-                        requests.get(DB_URL, params={'phone': phone, 'msg': edited_msg, 'sender': '산도리'})
-                        st.success("✅ 전송 완료!")
+                        send_response = requests.get(
+                            st.session_state.webhook_url,
+                            params={'phone': phone, 'msg': edited_msg},
+                            timeout=15,
+                        )
+                        send_response.raise_for_status()
+                        # 발신 기록은 영업용폰의 MacroDroid가 저장합니다.
+                        st.session_state.sms_send_notice = "✅ 영업용폰에 문자 발송을 요청했습니다. 발신 기록은 휴대폰에서 등록된 뒤 ‘새로운 메시지 확인’을 누르면 표시됩니다."
                         del st.session_state[f"draft_{phone}"]
                         st.cache_data.clear() 
                         st.rerun()
