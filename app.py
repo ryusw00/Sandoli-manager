@@ -294,6 +294,45 @@ def generate_reply_draft(messages):
     model = genai.GenerativeModel(st.session_state.selected_model)
     return model.generate_content(final_prompt).text
 
+def save_reply_editor(editor_key, draft_key):
+    """화면을 이동해 위젯이 사라져도 대화별 작성 내용은 유지합니다."""
+    st.session_state[draft_key] = st.session_state[editor_key]
+
+
+def render_reply_composer(messages, draft_key, editor_key, label):
+    """직접 입력, AI 생성, 내용 삭제가 같은 작성칸을 사용합니다."""
+    if draft_key not in st.session_state:
+        st.session_state[draft_key] = ""
+
+    col_generate, col_clear = st.columns([2, 1])
+    with col_generate:
+        if st.button("✨ AI 답변 초안 생성", key=f"{editor_key}_generate", use_container_width=True):
+            if not st.session_state.gemini_api_key:
+                st.error("시스템 연결 탭에서 Gemini API 키를 확인해주세요.")
+            elif not messages:
+                st.error("답변을 만들 대화 내용이 없습니다.")
+            else:
+                with st.spinner("AI가 답변 초안을 작성 중입니다..."):
+                    try:
+                        st.session_state[draft_key] = generate_reply_draft(messages)
+                    except Exception as exc:
+                        st.error(f"❌ 답변을 만들지 못했습니다: {exc}")
+    with col_clear:
+        if st.button("🗑️ 답변 내용 삭제", key=f"{editor_key}_clear", use_container_width=True):
+            st.session_state[draft_key] = ""
+
+    # 생성/삭제 결과를 위젯을 만들기 전에 반영해 재생성도 즉시 표시합니다.
+    st.session_state[editor_key] = st.session_state[draft_key]
+    return st.text_area(
+        label,
+        key=editor_key,
+        height=140,
+        placeholder="답변을 직접 입력하거나 AI 초안을 생성하세요.",
+        on_change=save_reply_editor,
+        args=(editor_key, draft_key),
+    )
+
+
 def render_chat(messages):
     chat_html = '<div class="chat-bg">\n'
     for msg in messages:
@@ -607,62 +646,49 @@ with tab_restore:
             use_container_width=True,
         )
 
-        col_generate, col_clear = st.columns([2, 1])
-        with col_generate:
-            if st.button("✨ 이 대화로 AI 답변 초안 생성", use_container_width=True, key=f"restore_ai_{revision}"):
-                if not st.session_state.gemini_api_key:
-                    st.error("시스템 연결 탭에서 Gemini API 키를 확인해주세요.")
-                elif not restored_messages:
-                    st.error("답변을 만들 대화 내용이 없습니다.")
+        if st.button("🗑️ 복원 내용 지우기", use_container_width=True, key=f"restore_clear_{revision}"):
+            st.session_state.restored_conversation = None
+            st.session_state.pop("restored_draft", None)
+            st.rerun()
+
+        edited_draft = render_reply_composer(
+            restored_messages,
+            draft_key="restored_draft",
+            editor_key=f"restored_draft_editor_{revision}",
+            label="📝 답변 작성 (수정 가능)",
+        )
+
+        if channel == "문자":
+            phone = normalize_korean_mobile(conversation_title)
+            if not re.fullmatch(r"010\d{8}", phone):
+                phone = normalize_korean_mobile(st.text_input(
+                    "답변을 보낼 휴대전화 번호",
+                    placeholder="01012345678",
+                    key=f"restored_phone_{revision}",
+                ))
+
+            if st.button("🚀 문자로 전송하기", type="primary", use_container_width=True, key=f"restored_send_{revision}"):
+                if not edited_draft.strip():
+                    st.error("보낼 내용을 입력해주세요.")
+                elif not re.fullmatch(r"010\d{8}", phone):
+                    st.error("010으로 시작하는 휴대전화 번호 11자리를 입력해주세요.")
+                elif not st.session_state.webhook_url:
+                    st.error("시스템 연결 탭에서 웹훅 주소를 확인해주세요.")
                 else:
-                    with st.spinner("AI가 답변 초안을 작성 중입니다..."):
-                        try:
-                            st.session_state.restored_draft = generate_reply_draft(restored_messages)
-                        except Exception as e:
-                            st.error(f"❌ 답변을 만들지 못했습니다: {e}")
-        with col_clear:
-            if st.button("🗑️ 복원 내용 지우기", use_container_width=True, key=f"restore_clear_{revision}"):
-                st.session_state.restored_conversation = None
-                st.session_state.pop("restored_draft", None)
-                st.rerun()
-
-        if "restored_draft" in st.session_state:
-            edited_draft = st.text_area(
-                "📝 답변 초안 (수정 가능)",
-                value=st.session_state.restored_draft,
-                height=140,
-                key=f"restored_draft_editor_{revision}",
-            )
-
-            if channel == "문자":
-                phone = normalize_korean_mobile(conversation_title)
-                if not re.fullmatch(r"010\d{8}", phone):
-                    phone = normalize_korean_mobile(st.text_input(
-                        "답변을 보낼 휴대전화 번호",
-                        placeholder="01012345678",
-                        key=f"restored_phone_{revision}",
-                    ))
-
-                if st.button("🚀 문자로 전송하기", type="primary", use_container_width=True, key=f"restored_send_{revision}"):
-                    if not re.fullmatch(r"010\d{8}", phone):
-                        st.error("010으로 시작하는 휴대전화 번호 11자리를 입력해주세요.")
-                    elif not st.session_state.webhook_url:
-                        st.error("시스템 연결 탭에서 웹훅 주소를 확인해주세요.")
-                    else:
-                        try:
-                            send_response = requests.get(
-                                st.session_state.webhook_url,
-                                params={"phone": phone, "msg": edited_draft},
-                                timeout=15,
-                            )
-                            send_response.raise_for_status()
-                            # 발신 기록은 영업용폰의 MacroDroid가 저장합니다.
-                            st.success("✅ 영업용폰에 문자 발송을 요청했습니다. 발신 기록은 휴대폰에서 등록된 뒤 ‘새로운 메시지 확인’을 누르면 표시됩니다.")
-                            st.cache_data.clear()
-                        except Exception as e:
-                            st.error(f"❌ 문자 전송 중 오류가 발생했습니다: {e}")
-            else:
-                st.info("인스타그램 자동 전송은 연결되어 있지 않습니다. 위 초안을 복사해 DM에 붙여넣어 주세요.")
+                    try:
+                        send_response = requests.get(
+                            st.session_state.webhook_url,
+                            params={"phone": phone, "msg": edited_draft},
+                            timeout=15,
+                        )
+                        send_response.raise_for_status()
+                        # 발신 기록은 영업용폰의 MacroDroid가 저장합니다.
+                        st.success("✅ 영업용폰에 문자 발송을 요청했습니다. 발신 기록은 휴대폰에서 등록된 뒤 ‘새로운 메시지 확인’을 누르면 표시됩니다.")
+                        st.cache_data.clear()
+                    except Exception as e:
+                        st.error(f"❌ 문자 전송 중 오류가 발생했습니다: {e}")
+        else:
+            st.info("인스타그램 자동 전송은 연결되어 있지 않습니다. 위 초안을 복사해 DM에 붙여넣어 주세요.")
 
 with tab1:
     if st.button("🔄 새로운 메시지 확인", use_container_width=True):
@@ -705,65 +731,36 @@ with tab1:
         st.subheader(conversation_label(phone))
         filtered_msgs = [msg for msg in sms_data if msg['phone'] == phone]
         render_chat(filtered_msgs)
-        chat_history_str = "\n".join(f"{msg['sender']}: {msg['message']}" for msg in filtered_msgs)
-        
-        # 메뉴 및 영업시간 포맷팅
-        formatted_menu_text = "\n".join([f"- {item['메뉴 이름']}: {item['가격']}" for item in st.session_state.menu_list if item.get('메뉴 이름')])
-        
-        formatted_hours_list = []
-        for h in st.session_state.business_hours:
-            if h.get("영업여부", True):
-                extra = f" ({h['비고']})" if h.get("비고") else ""
-                formatted_hours_list.append(f"- {h['요일']}: {h['오픈시간']} ~ {h['마감시간']}{extra}")
+        reply_messages = [
+            {"보낸 사람": msg["sender"], "내용": msg["message"]}
+            for msg in filtered_msgs
+        ]
+        editor_label = "📝 DM 답변 작성 (수정 가능)" if is_instagram_conversation(phone) else "📝 문자 작성 (수정 가능)"
+        edited_msg = render_reply_composer(
+            reply_messages,
+            draft_key=f"draft_{phone}",
+            editor_key=f"reply_editor_{phone}",
+            label=editor_label,
+        )
+
+        if is_instagram_conversation(phone):
+            st.info("인스타그램 자동 전송은 연결되어 있지 않습니다. 위 초안을 복사해 DM에 붙여넣어 주세요.")
+        elif st.button("🚀 문자로 전송하기", type="primary", use_container_width=True, key=f"send_btn_{phone}"):
+            if not edited_msg.strip():
+                st.error("보낼 내용을 입력해주세요.")
+            elif not st.session_state.webhook_url: st.error("❌ 시스템 연결 탭에서 웹훅 주소를 확인해주세요!")
             else:
-                formatted_hours_list.append(f"- {h['요일']}: 정기휴무")
-        formatted_hours_text = "\n".join(formatted_hours_list)
-        
-        if st.button("✨ AI 답변 초안 생성", key=f"ai_btn_{phone}"):
-            if not st.session_state.gemini_api_key: st.error("❌ 시스템 연결 탭에서 Gemini API 키를 확인해주세요!")
-            else:
-                with st.spinner("AI가 최적의 답변을 작성 중입니다..."):
-                    try:
-                        final_prompt = f"""{st.session_state.sando_persona}
+                try:
+                    send_response = requests.get(
+                        st.session_state.webhook_url,
+                        params={'phone': phone, 'msg': edited_msg},
+                        timeout=15,
+                    )
+                    send_response.raise_for_status()
+                    # 발신 기록은 영업용폰의 MacroDroid가 저장합니다.
+                    st.session_state.sms_send_notice = "✅ 영업용폰에 문자 발송을 요청했습니다. 발신 기록은 휴대폰에서 등록된 뒤 ‘새로운 메시지 확인’을 누르면 표시됩니다."
+                    del st.session_state[f"draft_{phone}"]
+                    st.cache_data.clear() 
+                    st.rerun()
+                except Exception as e: st.error(f"❌ 오류 발생: {e}")
 
-[메뉴/가격]
-{formatted_menu_text}
-
-[매장 영업시간]
-{formatted_hours_text}
-
-[기타 매장운영 정보]
-{st.session_state.store_info}
-
-[과거 대화 맥락]
-{chat_history_str}
-
-위 정보를 바탕으로 고객의 마지막 질문에 친절하고 정확하게 답해줘."""
-                        genai.configure(api_key=st.session_state.gemini_api_key)
-                        model = genai.GenerativeModel(st.session_state.selected_model)
-                        response = model.generate_content(final_prompt)
-                        st.session_state[f"draft_{phone}"] = response.text
-                    except Exception as e: st.error(f"❌ 오류: {e}")
-        
-        if f"draft_{phone}" in st.session_state:
-            editor_label = "📝 DM 답변 초안 (수정 가능)" if is_instagram_conversation(phone) else "📝 답변 발송 (수정 가능)"
-            edited_msg = st.text_area(editor_label, value=st.session_state[f"draft_{phone}"], height=120)
-
-            if is_instagram_conversation(phone):
-                st.info("인스타그램 자동 전송은 연결되어 있지 않습니다. 위 초안을 복사해 DM에 붙여넣어 주세요.")
-            elif st.button("🚀 문자로 전송하기", type="primary", use_container_width=True, key=f"send_btn_{phone}"):
-                if not st.session_state.webhook_url: st.error("❌ 시스템 연결 탭에서 웹훅 주소를 확인해주세요!")
-                else:
-                    try:
-                        send_response = requests.get(
-                            st.session_state.webhook_url,
-                            params={'phone': phone, 'msg': edited_msg},
-                            timeout=15,
-                        )
-                        send_response.raise_for_status()
-                        # 발신 기록은 영업용폰의 MacroDroid가 저장합니다.
-                        st.session_state.sms_send_notice = "✅ 영업용폰에 문자 발송을 요청했습니다. 발신 기록은 휴대폰에서 등록된 뒤 ‘새로운 메시지 확인’을 누르면 표시됩니다."
-                        del st.session_state[f"draft_{phone}"]
-                        st.cache_data.clear() 
-                        st.rerun()
-                    except Exception as e: st.error(f"❌ 오류 발생: {e}")
